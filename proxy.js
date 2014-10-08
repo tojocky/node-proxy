@@ -4,12 +4,15 @@ var net = require("net"),
 	url = require('url'),
 	debug = require('debug')('proxy'),
 	http = require('http'),
-	https = require('https');
+	https = require('https'),
+	fs = require('fs');
 
 params.version('0.0.1')
 	.option('-p, --port <n>', 'source port', parseInt)
 	.option('-d, --destination <host>', 'destination host to proxy, e.g.: socket://host:port, http://host, http://host:non80port, https://host:non443port')
-	.option('-c --cert <cert>', 'certificate')
+	.option('-k, --key [key]', 'key certificate for https')
+	.option('-c, --cert [cert]', 'certificate for https')
+	.option('-u, --rejectUnauthorized', 'reject unaothorized')
 	.parse(process.argv);
 
 if(!params.port || !params.destination) {
@@ -24,18 +27,34 @@ if(!params.url.protocol || ['socket:', 'http:', 'https:'].indexOf(params.url.pro
 	return params.help();
 }
 
+if(params.url.protocol === 'https:') {
+	if(!params.cert) {
+		console.error('cert is missing');
+		return params.help();
+	}
+
+	if(!params.key) {
+		console.error('key is missing');
+		return params.help();
+	}
+}
+
+
 process.on("uncaughtException", function(e) {
     console.error(e);
 });
- 
+
 net.createServer(function (proxySocket) {
 	console.info('proxy to '+params.destination+' from port '+params.port);
 	if(params.url.protocol === 'socket:') {
+		debug('socket connection');
 		proxyToSocket(proxySocket);
 	} else if (params.url.protocol === 'http:') {
+		debug('http connection');
 		proxyToHttp(proxySocket);
 	} else if (params.url.protocol === 'https:') {
-		proxyToHttps(proxySocket);
+		debug('secure https connection');
+		proxyToHttp(proxySocket, params);
 	} else {
 		console.error('not yet supported');
 		process.exit(1);
@@ -104,7 +123,7 @@ function sendJson(res, body, cookies){
 	res.end();
 }
 
-function proxyToHttp(proxySocket) {
+function proxyToHttp(proxySocket, httpsOptions) {
 	var connected = false,
 		queue = [],
 		processing = false,
@@ -114,18 +133,35 @@ function proxyToHttp(proxySocket) {
 			path: params.url.path || '/',
 			method: 'POST'
 		},
+		httpOrHttps = http,
 		cookies = {},
 		buffers = [],
 		refreshTimer,
+		numberofEmptyResponses = 0,
+		refreshTimerIfRequired = function() {
+			if (numberofEmptyResponses > 10) {
+				if (refreshTimer) {
+					debug('remove interval because of exceed number of empty responses');
+					clearInterval(refreshTimer);
+					refreshTimer = null;
+				}
+			} else {
+				if (!refreshTimer) {
+					refreshTimer = setInterval(function() {
+						if(processing) {
+							debug('processing %o', processing);
+							return;
+						}
+						++numberofEmptyResponses;
+						debug('sending refresh request %o', numberofEmptyResponses);
+						sendReq({cmd:'check'});
+					}, 200, true)
+				}
+			}
+		},
 		startConnection = function(){
 			sendReq({cmd:'connect'});
-			/*refreshTimer = setInterval(function() {
-				if(processing) {
-					return;
-				}
-				debug('sending refresh request');
-				sendReq({cmd:'check'});
-			}, 500, true)*/
+			refreshTimerIfRequired();
 			proxySocket.on("error", function (e) {
 				console.error('error:'+e);
 			});
@@ -158,7 +194,7 @@ function proxyToHttp(proxySocket) {
 			
 			processing = true;
 			
-			var req = http.request(options, function(res){
+			var req = httpOrHttps.request(options, function(res){
 						debug('STATUS: %o', res.statusCode);
 						//debug('HEADERS: %o', res.headers);
 						if(res.statusCode !== 200) {
@@ -202,6 +238,7 @@ function proxyToHttp(proxySocket) {
 									throw "Uknown command "+ responseObj.cmd;
 								}
 							} else if (responseObj.data) {
+								numberofEmptyResponses = 0;
 								for(var i = 0; i < responseObj.data.length; ++i) {
 									proxySocket.write(new Buffer(responseObj.data[i], 'base64'));
 								}
@@ -213,10 +250,12 @@ function proxyToHttp(proxySocket) {
 								debug('check queue');
 								sendReq({cmd:'check'});
 							} else if (!isEmptyResponse) {
-								// Send 1 more request because may exists the case when
+								// Send 1 more request because may exists more data
 								setTimeout(function() {
 									sendReq({cmd:'check'});
-								}, 700)
+								}, 50)
+							} else {
+								refreshTimerIfRequired();
 							}
 						})
 					});
@@ -230,6 +269,7 @@ function proxyToHttp(proxySocket) {
 				type: 'ssh'
 				};
 			if(queue.length) {
+				numberofEmptyResponses = 0;
 				debug('processing queue %o', queue);
 				body.data = [];
 				body.iter = 0;
@@ -260,10 +300,23 @@ function proxyToHttp(proxySocket) {
 			//req.end();
 		};
 	
-	startConnection();
-}
+	if(httpsOptions) {
+		debug('secure connection %o', httpsOptions);
 
-function proxyToHttps(proxySocket) {
-	var connected = false;
-	var buffers = new Array();
+		options.key = fs.readFileSync(httpsOptions.key);
+		options.cert = fs.readFileSync(httpsOptions.cert);
+		options.gent = new https.Agent(options);
+		if(typeof(httpsOptions.rejectUnauthorized) === 'boolean') {
+			debug('rejectUnauthorized: %o', true)
+			options.rejectUnauthorized = true;
+		} else {
+			options.rejectUnauthorized = false;
+		}
+		options.passphrase = 'Nu4eu1ta';
+		httpOrHttps = https;
+	}
+	
+	debug();
+
+	startConnection();
 }
