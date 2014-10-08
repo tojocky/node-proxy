@@ -1,0 +1,27 @@
+{
+  "name": "node-proxy",
+  "version": "1.0.0",
+  "description": "proxy to socket or http. used for ssh proxy",
+  "main": "proxy.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "http://github.com/tojocky/node-proxy.git"
+  },
+  "keywords": [
+    "proxy",
+    "ssh"
+  ],
+  "author": "Ion Lupascu <ionlupascu.gmail.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/tojocky/node-proxy/issues"
+  },
+  "homepage": "https://github.com/tojocky/node-proxy",
+  "dependencies": {
+    "commander": "^2.3.0",
+    "debug": "^2.0.0"
+  }
+}
